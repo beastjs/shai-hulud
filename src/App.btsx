@@ -1,213 +1,315 @@
 import { useCrawler, exampleUrl } from './lib/use-crawler'
 import FileMetadata from './components/FileMetadata.btsx'
+import Icon from './components/Icon.btsx'
+import Ring from './components/Ring.btsx'
+
+module
+  type Crawler = ReturnType<typeof useCrawler>;
+  const statusTone: Record<string, string> = { saved: 'green', failed: 'red', cancelled: 'amber', running: 'orange', pending: 'gray', ready: 'gray' };
+  const statusLabel: Record<string, string> = { saved: 'Saved', failed: 'Failed', cancelled: 'Cancelled', running: 'Running', pending: 'Queued', ready: 'Ready' };
+  const jobTone: Record<string, string> = { running: 'orange', completed: 'green', failed: 'red', cancelled: 'amber' };
+  const formatModes = ['btsx', 'tsrx', 'both'] as const;
+  const formatNames = { btsx: 'BTSX', tsrx: 'TSRX', both: 'BTSX + TSRX' };
+  const formatHints = { btsx: 'Beast syntax · writes .btsx', tsrx: 'Octane syntax · writes .tsrx', both: 'One request per file · writes both' };
+  const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
+  const started = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  // The headline card: a ring, a score-like figure, a status pill and four tiles.
+  function overview(c: Crawler) {
+    if (c.job) {
+      const total = c.job.files.length;
+      const done = total ? c.finished / total : 0;
+      return {
+        eyebrow: 'Conversion run', value: String(c.saved), total: `/ ${total}`, ring: done, ringLabel: `${Math.round(done * 100)}%`,
+        tone: jobTone[c.job.status], pill: c.job.status, caption: `Started ${started(c.job.createdAt)}`,
+        tiles: [
+          { label: 'Saved', value: c.saved, sub: `of ${total}`, alert: false },
+          { label: 'Unfinished', value: c.failed + c.cancelled, sub: c.failed ? `${c.failed} failed` : c.cancelled ? `${c.cancelled} cancelled` : 'None', alert: c.failed > 0 },
+          { label: 'Compiled', value: c.compiled, sub: c.compileFailed ? `${c.compileFailed} failed` : 'Octane OK', alert: c.compileFailed > 0 },
+          { label: 'Converter', value: c.job.converter ? (c.job.converter.target === 'local' ? 'Local' : 'Remote') : '—', sub: c.job.converter ? host(c.job.converter.url) : 'Not recorded', alert: false },
+        ],
+      };
+    }
+    if (c.scan) {
+      const ratio = c.eligibleCount ? c.selectedCount / c.eligibleCount : 0;
+      return {
+        eyebrow: 'Selected files', value: String(c.selectedCount), total: `/ ${c.eligibleCount}`, ring: ratio, ringLabel: `${Math.round(ratio * 100)}%`,
+        tone: c.selectedCount ? 'green' : 'gray', pill: c.selectedCount ? 'Ready' : 'Nothing selected', caption: `${c.plannedOutputs} outputs · ${formatNames[c.formatMode]}`,
+        tiles: [
+          { label: 'TSX', value: c.tsxCount, sub: 'To convert', alert: false },
+          { label: 'TypeScript', value: c.tsCount, sub: c.includeTs ? 'Copy as-is' : 'Excluded', alert: false },
+          { label: 'Selected', value: c.selectedCount, sub: `of ${c.eligibleCount}`, alert: false },
+          { label: 'Outputs', value: c.plannedOutputs, sub: formatNames[c.formatMode], alert: false },
+        ],
+      };
+    }
+    return {
+      eyebrow: 'Workspace', value: '—', total: '', ring: 0, ringLabel: '—', tone: 'gray', pill: 'Idle', caption: 'Inspect a repository to begin',
+      tiles: ['TSX', 'TypeScript', 'Selected', 'Outputs'].map(label => ({ label, value: '—', sub: 'Awaiting source', alert: false })),
+    };
+  }
+
+  function converterState(c: Crawler) {
+    const status = c.converterStatus;
+    if (!status) return { tone: 'gray', label: 'Checking…' };
+    if (status.ok) return { tone: 'green', label: `Online · ${status.latencyMs ?? 0} ms` };
+    return { tone: 'red', label: status.latencyMs === undefined ? 'Offline' : 'Not the API' };
+  }
 
 setup const c = useCrawler();
+setup const o = overview(c);
+setup const endpoint = converterState(c);
 
 div.app-shell
-  header.topbar
-    a.brand(href='/' aria-label='Shai Hulud home')
-      span.brand-mark(aria-hidden='true') ≋
-      span SHAI HULUD
-    div.topbar-right
-      span.local-dot
-      span Local workspace
-      span.version v0.1
+  div.frame
+    div.tray
+      header.tray-header
+        div.tray-title
+          h1 Shai Hulud
+          span.info-icon(tabIndex={0} title='Crawl public GitHub folders, convert TSX to BTSX or TSRX, and save the results locally.' aria-label='About Shai Hulud')
+            Icon(name='info' size={15})
+        div.converter-switch(role='radiogroup' aria-label='Converter endpoint')
+          button(type='button' role='radio' aria-checked={c.converter === 'remote'} onClick={() => c.chooseConverter('remote')} title={c.config?.converters.remote})
+            Icon(name='cloud' size={15})
+            span Remote
+            if c.converter === 'remote'
+              span(className={'live-dot tone-' + endpoint.tone} aria-hidden='true')
+          button(type='button' role='radio' aria-checked={c.converter === 'local'} onClick={() => c.chooseConverter('local')} title={c.config?.converters.local})
+            Icon(name='server' size={15})
+            span Local
+            if c.converter === 'local'
+              span(className={'live-dot tone-' + endpoint.tone} aria-hidden='true')
 
-  main.workspace
-    section.page-heading
-      div
-        p.eyebrow REPOSITORY → COMPONENTS
-        h1 Give your code a new form.
-        p.subtitle Crawl a public GitHub folder. Convert its TSX. Keep the result.
-      div.heading-stamp
-        span 01 / EXTRACT
-        span 02 / TRANSFORM
-        span 03 / SAVE
+      if c.error
+        div.alert(role='alert')
+          Icon(name='alert' size={16})
+          span #{c.error}
 
-    if c.error
-      div.alert(role='alert') #{c.error}
+      div.tray-body
+        aside.column
+          section.card
+            div.card-head
+              span.eyebrow 01 · Source
+              button.link-button(type='button' disabled={c.busy || c.running} onClick={() => c.setUrl(exampleUrl)}) Try the ReUI example
+            form.source-form(onSubmit={(event) => { event.preventDefault(); c.crawl(); }})
+              label.field-label(htmlFor='repo-url') GitHub repository or folder
+              textarea#repo-url.field(rows={3} placeholder='https://github.com/owner/repo/tree/main/components' value={c.url} onInput={(event) => c.setUrl(event.currentTarget.value)} disabled={c.busy || c.running} required={true} spellCheck={false})
+              span.meta Public repositories · includes subfolders
+              button.btn.btn-dark.btn-block(type='submit' disabled={!c.url.trim() || c.busy || c.running})
+                Icon(name='scan' size={15})
+                span #{c.busy && !c.running ? 'Working…' : 'Inspect repository'}
+            if c.source
+              div.repo
+                span.circle-icon
+                  Icon(name='branch' size={16})
+                div.repo-text
+                  strong #{c.source.owner + '/' + c.source.repo}
+                  span.meta.plain #{c.source.ref + ' · ' + c.source.commit.slice(0, 7) + ' · ' + (c.source.folder || 'root')}
 
-    div.workbench
-      aside.controls
-        section.panel.source-panel
-          div.section-heading
-            span.step 01
-            h2 Source repository
-          form(onSubmit={(event) => { event.preventDefault(); c.crawl(); }})
-            label.field-label(htmlFor='repo-url') GitHub URL
-            textarea#repo-url(rows={3} placeholder='https://github.com/owner/repo/tree/main/components' value={c.url} onInput={(event) => c.setUrl(event.currentTarget.value)} disabled={c.busy || c.running} required={true} spellCheck={false})
-            div.field-note Public repositories · includes subfolders
-            button.primary.scan-button(type='submit' disabled={!c.url.trim() || c.busy || c.running})
-              span #{c.busy && !c.running ? 'Working…' : 'Inspect repository'}
-              span(aria-hidden='true') ↗
-          button.example-button(type='button' disabled={c.busy || c.running} onClick={() => c.setUrl(exampleUrl)}) Try the ReUI example ↗
-          if c.source
-            div.repo-summary
-              strong #{c.source.owner + '/' + c.source.repo}
-              code #{c.source.ref + ' · ' + c.source.commit.slice(0, 7)}
-              span #{c.source.folder || 'Repository root'}
+          section.card
+            div.card-head
+              span.eyebrow 02 · Output
+            div.segmented(role='radiogroup' aria-label='Output format')
+              each mode in formatModes key mode
+                button(type='button' role='radio' aria-checked={c.formatMode === mode} disabled={c.running || c.busy} onClick={() => c.chooseFormat(mode)}) #{mode === 'both' ? 'Both' : formatNames[mode]}
+            p.meta.format-hint #{formatHints[c.formatMode]}
+            label.switch-row
+              span.switch-text
+                strong Include TypeScript files
+                span.meta Copy .ts files unchanged
+              input.sr-only(type='checkbox' role='switch' checked={c.includeTs} onChange={(event) => c.setIncludeTs(event.currentTarget.checked)} disabled={c.running || c.busy})
+              span.switch(aria-hidden='true')
 
-        section.panel
-          div.section-heading
-            span.step 02
-            h2 Conversion settings
-          p.field-label Output format
-          div.format-options
-            button.format-option(type='button' aria-pressed={c.formats.includes('btsx')} disabled={c.running || c.busy} onClick={() => c.toggleFormat('btsx')})
-              span.format-top
-                strong BTSX
-                span.selection-dot
-              code .btsx
-              span Beast syntax
-            button.format-option(type='button' aria-pressed={c.formats.includes('tsrx')} disabled={c.running || c.busy} onClick={() => c.toggleFormat('tsrx')})
-              span.format-top
-                strong TSRX
-                span.selection-dot
-              code .tsrx
-              span Octane syntax
-          label.check-row
-            input(type='checkbox' checked={c.includeTs} onChange={(event) => c.setIncludeTs(event.currentTarget.checked)} disabled={c.running || c.busy})
-            span
-              strong Include TypeScript files
-              small Copy .ts files without conversion
-          div.converter-note
-            span(className={c.config?.converterConfigured ? 'status-dot connected' : 'status-dot'})
-            span #{c.config?.converterConfigured ? 'Converter configured' : 'Connecting to local server…'}
-          if c.config?.converterUrl
-            code.endpoint(title={c.config.converterUrl}) #{c.config.converterUrl}
-          button.primary.convert-button(type='button' onClick={() => c.convert()} disabled={!c.scan || c.busy || c.running || !c.config?.converterConfigured || !c.formats.length || !c.selectedCount})
-            span #{c.running ? 'Conversion in progress…' : c.scan ? `Convert ${c.selectedCount} selected & save` : 'Convert & save locally'}
-            span(aria-hidden='true') →
-
-        div.storage-note
-          span.storage-icon(aria-hidden='true') ↓
-          div
-            strong Your files stay in your workspace.
-            p Outputs preserve the folder structure. Each run gets its own directory and manifest.
-
-      section.results
-        section.panel.files-panel
-          div.files-heading
-            div.section-heading
-              span.step 03
-              h2 #{c.job ? 'Conversion run' : 'Repository files'}
-            span.count-badge #{c.job ? c.job.files.length + ' outputs' : c.scan ? c.scan.files.length + ' files' : 'Awaiting source'}
-          if c.scan || c.job
-            fragment
-              div.stats-bar
-                if c.job
-                  fragment
-                    span
-                      strong #{c.saved}
-                      |  saved
-                    span
-                      strong #{c.failed}
-                      |  failed
-                    span.run-status(role='status') #{c.job.status}
-                else
-                  fragment
-                    span
-                      strong #{c.tsxCount}
-                      |  TSX to convert
-                    span
-                      strong #{c.tsCount}
-                      |  TypeScript files
-                    span Ready to convert
-              if c.job
-                div.progress-track(role='progressbar' aria-label='Conversion progress' aria-valuenow={c.finished} aria-valuemin={0} aria-valuemax={c.job.files.length})
-                  div.progress-fill(style={{ width: `${c.finished / c.job.files.length * 100}%` }})
-              div.file-toolbar
-                input.file-search(type='search' placeholder='Filter files…' aria-label='Filter files' value={c.filter} onInput={(event) => c.setFilter(event.currentTarget.value)})
-                if c.running
-                  button.text-button(type='button' onClick={() => c.cancel()}) Cancel run
-                else
-                  if c.job && (c.failed || c.job.status === 'cancelled')
-                    button.text-button(type='button' disabled={c.busy} onClick={() => c.retry()}) Retry unfinished files
-                  else
-                    span #{c.job ? 'Select a saved file to preview' : 'Recursive folder scan'}
-                if c.job && c.scan && !c.running
-                  button.text-button(type='button' disabled={c.busy} onClick={() => c.chooseFiles()}) Change file selection
-              if !c.job
-                div.file-selection-bar
-                  label.select-all
-                    input(type='checkbox' ref={c.selectAllRef} checked={c.allSelected} disabled={c.busy || !c.eligibleCount} onChange={() => c.toggleAll()})
-                    span Select all files
-                  span #{`${c.selectedCount} of ${c.eligibleCount} selected`}
-              div.file-list
-                each file in c.rows key file.output
-                  if c.job
-                    button.file-row.converted-file(type='button' disabled={file.status !== 'saved'} onClick={() => c.setOutputPath(file.output)} aria-pressed={c.outputPath === file.output} title={file.error || file.path})
-                      span.file-icon #{file.kind === 'tsx' ? 'TX' : 'TS'}
-                      span.file-info
-                        span.file-name #{file.path}
-                        if file.error || ('warning' in file && file.warning)
-                          span.file-error #{file.error || ('warning' in file ? file.warning : '')}
-                        else
-                          span.file-detail #{file.kind === 'ts' ? '.ts copied · ' + file.format + ' folder' : '→ .' + file.format}
-                        if file.kind === 'tsx' && (file.status === 'saved' || file.status === 'failed')
-                          FileMetadata(metadata={file.metadata})
-                        if file.kind === 'ts' && file.status === 'saved'
-                          span.file-detail Copied unchanged · compilation not run
-                      span(className={'file-status status-' + file.status}) #{file.status}
-                  else
-                    label.file-row.selectable-file
-                      input(type='checkbox' aria-label={`Select ${file.path}`} checked={c.selectedPaths.has(file.path) && (c.includeTs || file.kind === 'tsx')} disabled={c.busy || (!c.includeTs && file.kind === 'ts')} onChange={() => c.toggleFile(file.path)})
-                      span.file-icon #{file.kind === 'tsx' ? 'TX' : 'TS'}
-                      span.file-info
-                        span.file-name #{file.path}
-                        span.file-detail #{file.kind === 'tsx' ? 'Ready for conversion' : c.includeTs ? 'Copy unchanged when selected' : 'Enable “Include TypeScript files” to select'}
-                if !c.rows.length
-                  p.no-files #{c.filter ? 'No files match your filter.' : 'No .tsx or .ts files found in this folder.'}
-          else
-            div.empty-state
-              div.empty-illustration(aria-hidden='true')
-                div.orbit.orbit-one
-                div.orbit.orbit-two
-                div.code-tile &lt;/&gt;
-                span.mini-tile.tile-left .tsx
-                span.mini-tile.tile-right .btsx
-              h3 A new home for your components.
-              p Paste a repository or folder link to discover its TypeScript files and prepare your first conversion.
-              div.empty-tags
-                span Public GitHub repos
-                span Nested folders
-                span Two output formats
-          if c.job
-            fragment
-              div.output-location
-                div
-                  strong #{c.running ? 'Saving to' : 'Output directory'}
-                  code #{c.job.outputDir}
-                a.text-button(href={`/api/jobs/${c.job.id}/manifest`} download='manifest.json') Manifest ↓
-              if c.job.error
-                p.job-error(role='alert') #{c.job.error}
-
-        section.preview-panel
-          div.preview-header
-            div
-              span.terminal-dots(aria-hidden='true') ● ● ●
-              span #{c.preview?.path || 'Output preview'}
-            if c.preview
-              div.preview-actions
-                button(type='button' onClick={() => c.copyCode()}) #{c.copied ? 'Copied' : 'Copy'}
-                a(href={`/api/jobs/${c.job?.id}/output?path=${encodeURIComponent(c.preview.path)}&download=1`}) Download ↓
-          if c.previewLoading
-            p.preview-placeholder Loading saved file…
-          else
-            fragment
-              if c.previewError
-                p.preview-placeholder(role='alert') #{c.previewError}
+            div.endpoint
+              div.endpoint-head
+                span.eyebrow #{c.converter === 'local' ? 'Local converter' : 'Remote converter'}
+                span(className={'pill tone-' + endpoint.tone} role='status')
+                  span.pill-dot
+                  span #{endpoint.label}
+              if c.converter === 'local'
+                form.endpoint-row(onSubmit={(event) => { event.preventDefault(); c.applyLocalUrl(); }})
+                  input.field.endpoint-input(type='url' aria-label='Local converter URL' placeholder={c.config?.converters.local ?? 'http://localhost:8787/api/converter'} value={c.localDraft} onInput={(event) => c.setLocalDraft(event.currentTarget.value)} onBlur={() => c.applyLocalUrl()} spellCheck={false})
+                  button.icon-button(type='submit' title='Check again' aria-label='Check local converter')
+                    Icon(name='refresh' size={14})
               else
-                fragment
-                  if c.preview
-                    pre.code-preview
-                      code #{c.preview.code}
-                  else
-                    div.preview-empty
-                      code // Your next component starts here.
-                      p Converted code will be available to inspect as each file is saved.
+                div.endpoint-row
+                  code.endpoint-url(title={c.activeUrl}) #{c.activeUrl || 'Loading…'}
+                  button.icon-button(type='button' title='Check again' aria-label='Check remote converter' onClick={() => c.recheckConverter()})
+                    Icon(name='refresh' size={14})
+              if c.converterStatus && !c.converterStatus.ok
+                p.endpoint-error
+                  span #{c.converterStatus.error}
+                  if c.converter === 'local'
+                    span.endpoint-hint Run wrangler dev in your converter project, or enter the URL it serves.
 
-    footer.page-footer
-      span SHAI HULUD
-      span Built for moving code forward.
-      span .tsx → .btsx / .tsrx
+        main.column
+          section.card.overview
+            div.overview-top
+              Ring(value={o.ring} tone={o.tone} label={o.ringLabel})
+              div.score
+                span.eyebrow #{o.eyebrow}
+                div.score-value
+                  strong #{o.value}
+                  if o.total
+                    span #{o.total}
+                div.score-caption
+                  span(className={'pill tone-' + o.tone}) #{o.pill}
+                  span.meta #{o.caption}
+              div.overview-cta
+                if c.running
+                  button.btn.btn-outline(type='button' onClick={() => c.cancel()})
+                    Icon(name='x' size={14})
+                    span Cancel run
+                elseif c.job && (c.failed || c.cancelled)
+                  button.btn.btn-accent(type='button' disabled={c.busy} onClick={() => c.retry()})
+                    Icon(name='retry' size={14})
+                    span Retry unfinished
+                elseif c.job
+                  button.btn.btn-outline(type='button' disabled={c.busy || !c.url.trim()} onClick={() => c.scan ? c.chooseFiles() : c.crawl()})
+                    Icon(name='scan' size={14})
+                    span #{c.scan ? 'Change selection' : 'Inspect again'}
+                else
+                  button.btn.btn-accent(type='button' onClick={() => c.convert()} disabled={!c.scan || c.busy || !c.selectedCount || !c.config?.converterConfigured})
+                    Icon(name='convert' size={14})
+                    span Convert & save
+            div.tiles
+              each tile in o.tiles key tile.label
+                div.tile
+                  span.eyebrow #{tile.label}
+                  strong #{tile.value}
+                  span(className={tile.alert ? 'meta tile-alert' : 'meta'} title={tile.sub}) #{tile.sub}
+
+          if c.scan || c.job
+            section.card.tabs-card
+              div.tabs(role='tablist' aria-label='Filter files')
+                each tab in c.tabs key tab.key
+                  button(type='button' role='tab' aria-selected={c.view === tab.key} onClick={() => c.setView(tab.key)})
+                    span #{tab.label}
+                    span.tab-count #{tab.count}
+
+          section.card.files
+            div.card-head
+              div.card-title
+                h2 #{c.job ? 'Outputs' : 'Files'}
+                if c.scan || c.job
+                  span.count-badge #{c.job ? c.job.files.length : c.scan?.files.length}
+              span.meta #{c.running ? 'Converting…' : 'Sorted by path'}
+            if c.scan || c.job
+              fragment
+                if c.segments.length
+                  fragment
+                    div.status-bar(aria-hidden='true')
+                      each segment in c.segments key segment.key
+                        span(className={'status-segment tone-' + segment.tone} style={{ flexGrow: segment.count }})
+                    div.chips
+                      each segment in c.segments key segment.key
+                        span.chip
+                          span(className={'chip-dot tone-' + segment.tone})
+                          span #{segment.label}
+                          span.chip-count #{segment.count}
+                div.toolbar
+                  label.search
+                    Icon(name='search' size={14})
+                    input(type='search' placeholder='Filter by path…' aria-label='Filter files' value={c.filter} onInput={(event) => c.setFilter(event.currentTarget.value)})
+                  if c.job
+                    if c.scan && !c.running && (c.failed || c.cancelled)
+                      button.link-button(type='button' disabled={c.busy} onClick={() => c.chooseFiles()}) Change selection
+                  else
+                    label.select-all-toggle
+                      input.sr-only(type='checkbox' ref={c.selectAllRef} checked={c.allSelected} disabled={c.busy || !c.eligibleCount} onChange={() => c.toggleAll()})
+                      span.check(aria-hidden='true')
+                        Icon(name='check' size={12})
+                      span Select all
+                      span.meta #{`${c.selectedCount} of ${c.eligibleCount}`}
+                if c.job?.error
+                  p.row-error.job-error(role='alert') #{c.job.error}
+                div.file-list
+                  each row in c.rows key row.output
+                    if c.job
+                      button.row.output-row(type='button' disabled={row.status !== 'saved'} onClick={() => c.setOutputPath(row.output)} aria-pressed={c.outputPath === row.output} title={row.path})
+                        span.circle-icon
+                          Icon(name={row.kind === 'tsx' ? 'code' : 'braces'} size={16})
+                          span(className={'circle-dot tone-' + statusTone[row.status]})
+                        span.row-body
+                          span.row-title #{row.name}
+                          span.row-meta
+                            if row.dir
+                              span.row-path #{row.dir + ' · '}
+                            span #{(row.kind === 'tsx' ? 'tsx → ' : 'ts copy → ') + row.format}
+                          if row.error || row.warning
+                            span(className={row.error ? 'row-error' : 'row-warning'}) #{row.error || row.warning}
+                        span.row-details
+                          if row.kind === 'tsx' && (row.status === 'saved' || row.status === 'failed')
+                            FileMetadata(metadata={row.metadata})
+                          if row.kind === 'ts' && row.status === 'saved'
+                            span.meta Copied unchanged · not compiled
+                        span(className={'pill tone-' + statusTone[row.status]}) #{statusLabel[row.status]}
+                    else
+                      label.row.select-row
+                        span.circle-icon
+                          Icon(name={row.kind === 'tsx' ? 'code' : 'braces'} size={16})
+                        span.row-body
+                          span.row-title #{row.name}
+                          span.row-meta
+                            if row.dir
+                              span.row-path #{row.dir + ' · '}
+                            span #{row.kind === 'tsx' ? 'tsx · convert' : c.includeTs ? 'ts · copy as-is' : 'ts · excluded'}
+                        input.sr-only(type='checkbox' aria-label={`Select ${row.path}`} checked={c.selectedPaths.has(row.path) && (c.includeTs || row.kind === 'tsx')} disabled={c.busy || (!c.includeTs && row.kind === 'ts')} onChange={() => c.toggleFile(row.path)})
+                        span.check(aria-hidden='true')
+                          Icon(name='check' size={12})
+                  empty
+                    p.no-files #{c.filter ? 'No files match your filter.' : c.view !== 'all' ? 'Nothing in this view.' : 'No .tsx or .ts files found in this folder.'}
+            else
+              div.empty-state
+                div.empty-art(aria-hidden='true')
+                  span.circle-icon.large
+                    Icon(name='code' size={20})
+                  span.empty-line
+                  span.circle-icon.large.accent
+                    Icon(name='convert' size={20})
+                  span.empty-line
+                  span.circle-icon.large
+                    Icon(name='folder' size={20})
+                h3 Nothing inspected yet
+                p Paste a repository or folder link to discover its TypeScript files and prepare your first conversion.
+                div.chips
+                  span.chip Public GitHub repos
+                  span.chip Nested folders
+                  span.chip BTSX & TSRX
+
+          section.card.preview
+            div.card-head
+              div.card-title
+                span.circle-icon
+                  Icon(name='file' size={15})
+                div.preview-title
+                  h2 Preview
+                  span.meta.plain #{c.preview?.path || (c.job ? 'Select a saved output' : 'Converted code appears here')}
+              if c.preview
+                div.preview-actions
+                  button.btn.btn-outline.btn-sm(type='button' onClick={() => c.copyCode()})
+                    Icon(name={c.copied ? 'check' : 'copy'} size={13})
+                    span #{c.copied ? 'Copied' : 'Copy'}
+                  a.btn.btn-outline.btn-sm(href={`/api/jobs/${c.job?.id}/output?path=${encodeURIComponent(c.preview.path)}&download=1`})
+                    Icon(name='download' size={13})
+                    span Download
+            if c.previewLoading
+              p.preview-placeholder Loading saved file…
+            elseif c.previewError
+              p.preview-placeholder.row-error(role='alert') #{c.previewError}
+            elseif c.preview
+              pre.code-preview
+                code #{c.preview.code}
+            else
+              div.preview-placeholder
+                code // Your next component starts here.
+
+      footer.tray-footer
+        div.footer-status
+          span(className={'live-dot tone-' + (c.job ? jobTone[c.job.status] : 'gray')} aria-hidden='true')
+          span.meta #{c.job ? (c.running ? 'Saving to' : 'Output') : 'Output root'}
+          code(title={c.job?.outputDir ?? c.config?.outputRoot}) #{c.job?.outputDir ?? c.config?.outputRoot ?? '—'}
+        if c.job
+          a.btn.btn-outline(href={`/api/jobs/${c.job.id}/manifest`} download='manifest.json')
+            Icon(name='download' size={14})
+            span Manifest

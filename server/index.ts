@@ -1,17 +1,23 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
-import type { OutputFormat, Scan } from '../src/lib/types';
-import { createConverter, defaultConverterUrl } from './converter';
+import type { ConverterTarget, OutputFormat, Scan } from '../src/lib/types';
+import { checkConverter, converterUrl, createConverter, defaultConverterUrl, defaultLocalConverterUrl, publicUrl } from './converter';
 import { HttpError, scanRepository } from './github';
-import { JobStore, safePath, selectFiles } from './jobs';
+import { JobStore, safePath, selectFiles, type ConverterChoice } from './jobs';
 
 const port = Number(process.env.PORT || 8788);
-const converterUrl = process.env.CONVERTER_URL || defaultConverterUrl;
-const endpoint = new URL(converterUrl);
-if (!['http:', 'https:'].includes(endpoint.protocol)) throw new Error('CONVERTER_URL must use HTTP or HTTPS.');
+const remoteUrl = converterUrl(process.env.CONVERTER_URL || defaultConverterUrl);
+const localUrl = converterUrl(process.env.LOCAL_CONVERTER_URL || defaultLocalConverterUrl, true);
 const outputRoot = resolve(process.env.OUTPUT_DIR || 'output');
-const store = new JobStore(outputRoot, createConverter(converterUrl));
+const store = new JobStore(outputRoot, createConverter(remoteUrl));
+
+/** Resolves the UI's converter choice. The local URL may be overridden per request. */
+function converterFor(target: unknown, url?: unknown): ConverterChoice & { endpoint: string } {
+  if (target !== 'remote' && target !== 'local') throw new HttpError(400, 'Choose the remote or local converter.');
+  const endpoint = target === 'remote' ? remoteUrl : url ? converterUrl(url, true) : localUrl;
+  return { target: target as ConverterTarget, url: publicUrl(endpoint), endpoint, convert: createConverter(endpoint) };
+}
 const scans = new Map<string, { scan: Scan; created: number }>();
 let scanning = false;
 
@@ -46,7 +52,11 @@ const server = createServer(async (req, res) => {
     }
     const url = new URL(req.url || '/', `http://127.0.0.1:${port}`);
     if (req.method === 'GET' && url.pathname === '/api/config') {
-      json(res, { converterConfigured: true, converterUrl: endpoint.origin + endpoint.pathname, outputRoot }); return;
+      json(res, { converterConfigured: true, converters: { remote: publicUrl(remoteUrl), local: publicUrl(localUrl) }, outputRoot }); return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/converter/status') {
+      const choice = converterFor(url.searchParams.get('target'), url.searchParams.get('url'));
+      json(res, { target: choice.target, url: choice.url, ...await checkConverter(choice.endpoint) }); return;
     }
     if (req.method === 'POST' && url.pathname === '/api/scan') {
       const data = await body(req);
@@ -67,13 +77,18 @@ const server = createServer(async (req, res) => {
       if (!entry || Date.now() - entry.created > 3_600_000) throw new HttpError(400, 'Inspect the repository again before converting.');
       if (!Array.isArray(data.formats) || !data.formats.length || data.formats.some(format => format !== 'btsx' && format !== 'tsrx')) throw new HttpError(400, 'Choose BTSX, TSRX, or both.');
       if (typeof data.includeTs !== 'boolean') throw new HttpError(400, 'includeTs must be a boolean.');
-      json(res, await store.start(selectFiles(entry.scan, data.selectedPaths), data.formats as OutputFormat[], data.includeTs), 202); return;
+      const converter = converterFor(data.converter ?? 'remote', data.converterUrl);
+      json(res, await store.start(selectFiles(entry.scan, data.selectedPaths), data.formats as OutputFormat[], data.includeTs, converter), 202); return;
     }
     const match = url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)(?:\/(cancel|retry|output|manifest))?$/);
     if (match) {
       const [, id, action] = match;
       if (req.method === 'POST' && action === 'retry') {
-        await body(req); json(res, await store.retry(id), 202); return;
+        const data = await body(req);
+        // Without an explicit choice, retry against the endpoint the run last used.
+        const previous = data.converter === undefined ? (await store.get(id)).converter : undefined;
+        const converter = converterFor(data.converter ?? previous?.target ?? 'remote', data.converter === undefined ? previous?.url : data.converterUrl);
+        json(res, await store.retry(id, converter), 202); return;
       }
       if (req.method === 'POST' && action === 'cancel') {
         await body(req); await store.get(id); store.cancel(id); json(res, { ok: true }); return;

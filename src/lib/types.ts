@@ -1,4 +1,5 @@
 export type OutputFormat = 'btsx' | 'tsrx';
+export type ConverterTarget = 'remote' | 'local';
 
 export interface SourceFile {
   path: string;
@@ -53,11 +54,22 @@ export interface Job {
   outputDir: string;
   source: Omit<Scan, 'files'>;
   files: JobFile[];
+  /** Converter endpoint used by the latest start or retry; absent on older runs. */
+  converter?: { target: ConverterTarget; url: string };
   error?: string;
 }
 
 export interface AppConfig {
   converterConfigured: boolean;
-  converterUrl: string | null;
+  converters: Record<ConverterTarget, string>;
   outputRoot: string;
+}
+
+export interface ConverterStatus {
+  target: ConverterTarget;
+  url: string;
+  /** True only when the endpoint answers like the converter API (JSON). */
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
 }

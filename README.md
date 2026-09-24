@@ -15,14 +15,30 @@ Open http://127.0.0.1:3000. The command starts the UI and a local API on port
 8788. The converter is already configured to use
 `https://playground.beastjs.workers.dev/api/converter`.
 
+### Remote or local converter
+
+The **Remote / Local** switch in the header chooses the converter for new runs
+and retries. Remote uses `CONVERTER_URL`. Local uses `LOCAL_CONVERTER_URL`
+(default `http://localhost:8787/api/converter`, where `wrangler dev` serves the
+converter Worker). With Local selected, the Output card accepts another local
+URL; it must use `localhost`, `127.0.0.1` or `[::1]`. The choice and URL are
+remembered in the browser; clear the field to return to the default.
+
+The status pill checks the endpoint when you switch, press the refresh button,
+or return to the tab. Only a JSON answer counts as the API, so a UI dev server
+on the same port shows **Not the API** rather than **Online**. Each run records
+the endpoint it used in its manifest and shows it in the Converter tile. Retry
+uses the endpoint currently selected, so a run can be finished locally after the
+remote Worker hits its resource limits.
+
 1. Paste a repository or `/tree/<ref>/<folder>` link, or use the ReUI example.
 2. Select **Inspect repository** to scan the folder and all its subfolders.
 3. Check the files you want to process. **Select all files** selects or clears
    the whole folder, including files hidden by the search filter. Files start
    selected; an empty selection disables conversion.
-4. Choose BTSX, TSRX, or both. Leave **Include TypeScript files** checked to
+4. Choose BTSX, TSRX, or both, and the Remote or Local converter. Leave **Include TypeScript files** checked to
    copy selected `.ts` files unchanged into each selected output tree.
-5. Select **Convert selected & save**. Progress, failures, and converter warnings
+5. Select **Convert & save**. Progress, failures, and converter warnings
    appear per output. Select a saved file to preview, copy, or download it.
    Converted rows show source → output line, character, and token counts and
    the converter's explicit Octane compilation result. Compilation failures
@@ -81,7 +97,8 @@ Restart `bun run dev` after changing settings.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CONVERTER_URL` | Live Beast `/api/converter` URL | Complete converter endpoint URL |
+| `CONVERTER_URL` | Live Beast `/api/converter` URL | Complete remote converter endpoint URL |
+| `LOCAL_CONVERTER_URL` | `http://localhost:8787/api/converter` | Default endpoint for the Local switch; loopback hosts only |
 | `GITHUB_TOKEN` | Unset | Optional server-only token for a higher GitHub API limit |
 | `OUTPUT_DIR` | `output` | Local output root; relative paths resolve from the project |
 | `PORT` | `8788` | Local API port; UI proxy uses the same value |
@@ -129,9 +146,10 @@ run's manifest.
 ## Code
 
 - `src/App.btsx`: application UI.
+- `src/components/`: file metrics, the progress ring, and inline icons.
 - `src/lib/use-crawler.ts`: client state, polling, and output preview.
 - `server/github.ts`: URL parsing, ref resolution, recursive discovery, and source reads.
-- `server/converter.ts`: live converter request and response handling.
+- `server/converter.ts`: converter requests, endpoint validation, and health checks.
 - `server/jobs.ts`: sequential batch processing, cancellation, and local persistence.
 - `server/index.ts`: local HTTP API and production asset serving.
 - `server/crawler.test.ts`: regression tests using isolated temporary output directories.

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'octane';
-import type { AppConfig, Job, OutputFormat, Scan } from './types';
+import type { AppConfig, ConversionMetadata, ConverterStatus, ConverterTarget, Job, JobFile, OutputFormat, Scan } from './types';
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api${path}`, body === undefined ? undefined : {
@@ -11,6 +11,31 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
 }
 export const exampleUrl = 'https://github.com/keenthemes/reui/tree/main/registry/bases/base/ui';
 
+export type FormatMode = OutputFormat | 'both';
+export type Tone = 'green' | 'red' | 'orange' | 'amber' | 'gray';
+/** One slice of the status bar, its legend chip, and (for tabs) a filter. */
+export interface Segment { key: string; label: string; count: number; tone: Tone }
+export interface Row {
+  path: string;
+  name: string;
+  dir: string;
+  kind: 'tsx' | 'ts';
+  format: OutputFormat | '';
+  output: string;
+  status: JobFile['status'] | 'ready';
+  error?: string;
+  warning?: string;
+  metadata?: ConversionMetadata;
+}
+
+const jobViews: Record<string, JobFile['status'][]> = {
+  saved: ['saved'], unfinished: ['failed', 'cancelled'], queued: ['pending', 'running'],
+};
+function splitPath(path: string) {
+  const slash = path.lastIndexOf('/');
+  return { name: path.slice(slash + 1), dir: slash < 0 ? '' : path.slice(0, slash) };
+}
+
 export function useCrawler() {
   const [url, setUrl] = useState('');
   const [scan, setScan] = useState<Scan | null>(null);
@@ -21,6 +46,7 @@ export function useCrawler() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('');
+  const [view, setView] = useState('all');
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const [preview, setPreview] = useState<{ path: string; code: string } | null>(null);
@@ -28,6 +54,12 @@ export function useCrawler() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [outputPath, setOutputPath] = useState('');
   const [copied, setCopied] = useState(false);
+  const [converter, setConverter] = useState<ConverterTarget>(() => localStorage.getItem('shai-hulud:converter') === 'local' ? 'local' : 'remote');
+  // An empty local URL means the server's LOCAL_CONVERTER_URL default.
+  const [localUrl, setLocalUrl] = useState(() => localStorage.getItem('shai-hulud:local-converter-url') ?? '');
+  const [localDraft, setLocalDraft] = useState(localUrl);
+  const [converterStatus, setConverterStatus] = useState<ConverterStatus | null>(null);
+  const [statusCheck, setStatusCheck] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -43,8 +75,23 @@ export function useCrawler() {
         setIncludeTs(value.files.some(file => file.path.endsWith('.ts')));
       }
     }).catch(() => localStorage.removeItem('shai-hulud:last-job'));
-    return () => { alive = false; };
+    // Recheck the converter when returning to the tab, e.g. after starting it.
+    const recheck = () => setStatusCheck(count => count + 1);
+    window.addEventListener('focus', recheck);
+    return () => { alive = false; window.removeEventListener('focus', recheck); };
   }, []);
+
+  const endpointOverride = converter === 'local' ? localUrl : '';
+  useEffect(() => {
+    let alive = true;
+    setConverterStatus(null);
+    const query = new URLSearchParams({ target: converter });
+    if (endpointOverride) query.set('url', endpointOverride);
+    api<ConverterStatus>(`/converter/status?${query}`)
+      .then(value => { if (alive) setConverterStatus(value); })
+      .catch(error => { if (alive) setConverterStatus({ target: converter, url: endpointOverride, ok: false, error: error instanceof Error ? error.message : 'Could not check the converter.' }); });
+    return () => { alive = false; };
+  }, [converter, endpointOverride, statusCheck]);
 
   const jobId = job?.id;
   const running = job?.status === 'running';
@@ -80,11 +127,24 @@ export function useCrawler() {
     return () => controller.abort();
   }, [jobId, outputPath]);
 
+  function chooseConverter(target: ConverterTarget) {
+    setConverter(target);
+    localStorage.setItem('shai-hulud:converter', target);
+  }
+  function applyLocalUrl() {
+    const value = localDraft.trim();
+    if (value === localUrl) { setStatusCheck(count => count + 1); return; }
+    setLocalUrl(value);
+    if (value) localStorage.setItem('shai-hulud:local-converter-url', value);
+    else localStorage.removeItem('shai-hulud:local-converter-url');
+  }
+  const converterRequest = () => ({ converter, ...(endpointOverride ? { converterUrl: endpointOverride } : {}) });
+
   async function crawl() {
     setBusy(true); setError(''); setScan(null); setPreview(null); setOutputPath('');
     try {
       const result = await api<Scan>('/scan', { url });
-      setScan(result); setJob(null); setFilter('');
+      setScan(result); setJob(null); setFilter(''); setView('all');
       setSelectedPaths(new Set(result.files.map(file => file.path)));
       localStorage.removeItem('shai-hulud:last-job');
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not inspect this folder.'); }
@@ -94,8 +154,8 @@ export function useCrawler() {
     if (!scan || !selectedFiles.length) return;
     setBusy(true); setError(''); setPreview(null); setOutputPath('');
     try {
-      const result = await api<Job>('/jobs', { scanId: scan.id, formats, includeTs, selectedPaths: selectedFiles.map(file => file.path) });
-      setJob(result); localStorage.setItem('shai-hulud:last-job', result.id);
+      const result = await api<Job>('/jobs', { scanId: scan.id, formats, includeTs, selectedPaths: selectedFiles.map(file => file.path), ...converterRequest() });
+      setJob(result); setView('all'); localStorage.setItem('shai-hulud:last-job', result.id);
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not start conversion.'); }
     finally { setBusy(false); }
   }
@@ -107,7 +167,7 @@ export function useCrawler() {
   async function retry() {
     if (!job) return;
     setBusy(true); setError('');
-    try { setJob(await api<Job>(`/jobs/${job.id}/retry`, {})); }
+    try { setJob(await api<Job>(`/jobs/${job.id}/retry`, converterRequest())); }
     catch (error) { setError(error instanceof Error ? error.message : 'Could not retry the run.'); }
     finally { setBusy(false); }
   }
@@ -116,9 +176,8 @@ export function useCrawler() {
     try { await navigator.clipboard.writeText(preview.code); setCopied(true); setTimeout(() => setCopied(false), 1600); }
     catch { setPreviewError('Clipboard unavailable. Select the code or download the file.'); }
   }
-  function toggleFormat(format: OutputFormat) {
-    setFormats(current => current.includes(format) ? current.filter(value => value !== format) : [...current, format]);
-  }
+  const formatMode: FormatMode = formats.length > 1 ? 'both' : formats[0] ?? 'btsx';
+  function chooseFormat(mode: FormatMode) { setFormats(mode === 'both' ? ['btsx', 'tsrx'] : [mode]); }
   const files = scan?.files ?? [];
   const eligibleFiles = files.filter(file => includeTs || file.kind === 'tsx');
   const selectedFiles = eligibleFiles.filter(file => selectedPaths.has(file.path));
@@ -126,7 +185,7 @@ export function useCrawler() {
   const partiallySelected = selectedFiles.length > 0 && !allSelected;
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = partiallySelected;
-  }, [partiallySelected, scan, job]);
+  }, [partiallySelected, scan, job, view]);
   function toggleFile(path: string) {
     setSelectedPaths(current => {
       const next = new Set(current);
@@ -143,22 +202,60 @@ export function useCrawler() {
       return next;
     });
   }
-  function chooseFiles() { setJob(null); setPreview(null); setOutputPath(''); }
-  const saved = job?.files.filter(file => file.status === 'saved').length ?? 0;
-  const failed = job?.files.filter(file => file.status === 'failed').length ?? 0;
-  const finished = job?.files.filter(file => !['running', 'pending'].includes(file.status)).length ?? 0;
-  const rows = job ? job.files.map(file => ({ ...file, kind: file.path.endsWith('.tsx') ? 'tsx' : 'ts' })) : files.map(file => ({
-    ...file, output: file.path, format: '' as const, status: 'ready' as const, error: undefined, metadata: undefined,
+  function chooseFiles() { setJob(null); setPreview(null); setOutputPath(''); setView('all'); }
+
+  const count = (...statuses: JobFile['status'][]) => job?.files.filter(file => statuses.includes(file.status)).length ?? 0;
+  const saved = count('saved');
+  const failed = count('failed');
+  const cancelled = count('cancelled');
+  const queued = count('pending', 'running');
+  const finished = (job?.files.length ?? 0) - queued;
+  const compiled = job?.files.filter(file => file.metadata?.octane.ok === true).length ?? 0;
+  const compileFailed = job?.files.filter(file => file.metadata?.octane.ok === false).length ?? 0;
+  const tsxCount = files.filter(file => file.kind === 'tsx').length;
+  const tsCount = files.filter(file => file.kind === 'ts').length;
+  const selectedTsx = selectedFiles.filter(file => file.kind === 'tsx').length;
+
+  const segments: Segment[] = job ? [
+    { key: 'saved', label: 'Saved', count: saved, tone: 'green' },
+    { key: 'failed', label: 'Failed', count: failed, tone: 'red' },
+    { key: 'cancelled', label: 'Cancelled', count: cancelled, tone: 'amber' },
+    { key: 'running', label: 'Running', count: count('running'), tone: 'orange' },
+    { key: 'pending', label: 'Queued', count: count('pending'), tone: 'gray' },
+  ] : [
+    { key: 'tsx', label: 'TSX', count: selectedTsx, tone: 'orange' },
+    { key: 'ts', label: 'TS', count: selectedFiles.length - selectedTsx, tone: 'amber' },
+    { key: 'skipped', label: 'Skipped', count: files.length - selectedFiles.length, tone: 'gray' },
+  ];
+  const tabs = job ? [
+    { key: 'all', label: 'All outputs', count: job.files.length },
+    { key: 'saved', label: 'Saved', count: saved },
+    { key: 'unfinished', label: 'Unfinished', count: failed + cancelled },
+    { key: 'queued', label: 'Queued', count: queued },
+  ] : [
+    { key: 'all', label: 'All files', count: files.length },
+    { key: 'tsx', label: 'TSX', count: tsxCount },
+    { key: 'ts', label: 'TypeScript', count: tsCount },
+  ];
+
+  const rows: Row[] = job ? job.files.map(file => ({ ...file, ...splitPath(file.path), kind: file.path.endsWith('.tsx') ? 'tsx' : 'ts' })) : files.map(file => ({
+    path: file.path, ...splitPath(file.path), kind: file.kind, output: file.path, format: '', status: 'ready',
   }));
+  const inView = (row: Row) => view === 'all' || (job ? jobViews[view]?.includes(row.status as JobFile['status']) : row.kind === view);
+  const query = filter.toLowerCase();
+  const activeUrl = converterStatus?.url || (config ? config.converters[converter] : '');
   return {
     url, setUrl: (value: string) => { setUrl(value); setScan(null); }, scan, source: scan ?? job?.source,
-    job, config, formats, includeTs, setIncludeTs, busy, error, filter, setFilter,
+    job, config, formats, formatMode, chooseFormat, includeTs, setIncludeTs, busy, error, filter, setFilter,
     preview, previewError, previewLoading, outputPath, setOutputPath, copied, running,
-    crawl, convert, cancel, retry, copyCode, toggleFormat, saved, failed, finished,
+    crawl, convert, cancel, retry, copyCode, saved, failed, cancelled, queued, finished, compiled, compileFailed,
     selectedPaths, selectedCount: selectedFiles.length, eligibleCount: eligibleFiles.length,
+    plannedOutputs: selectedFiles.length * formats.length,
     allSelected, selectAllRef, toggleFile, toggleAll, chooseFiles,
-    rows: rows.filter(file => file.path.toLowerCase().includes(filter.toLowerCase())),
-    tsxCount: files.filter(file => file.kind === 'tsx').length,
-    tsCount: files.filter(file => file.kind === 'ts').length,
+    converter, chooseConverter, converterStatus, activeUrl, localDraft, setLocalDraft, applyLocalUrl,
+    recheckConverter: () => setStatusCheck(value => value + 1),
+    segments: segments.filter(segment => segment.count > 0), tabs, view, setView,
+    rows: rows.filter(row => inView(row) && row.path.toLowerCase().includes(query)),
+    tsxCount, tsCount,
   };
 }

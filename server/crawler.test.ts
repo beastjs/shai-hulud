@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createConverter } from './converter';
+import { checkConverter, converterUrl, createConverter } from './converter';
 import { parseGitHubUrl, readSource, scanRepository, type Fetcher } from './github';
 import { JobStore, safePath, selectFiles, type Convert } from './jobs';
 import { extractMetadata } from './metadata';
@@ -271,4 +271,41 @@ test('legacy runs recover matching saved metadata and never claim success from a
     await writeFile(join(done.outputDir, 'responses/nested/a.tsx.json'), JSON.stringify({ ...raw, outputs: { btsx: { code: 'different code' } } }));
     assert.equal((await new JobStore(dir, convert).get(done.id)).files[0].metadata, undefined);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('runs and records the chosen converter endpoint, including on retry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shai-test-'));
+  try {
+    const used: string[] = [];
+    const endpoint = (target: 'remote' | 'local', code: string | null) => ({
+      target, url: `http://${target}.test/api/converter`,
+      convert: (async () => { used.push(target); return code === null ? { outputs: { btsx: { error: 'down' } }, raw: {} } : { outputs: { btsx: { code } }, raw: {} }; }) as Convert,
+    });
+    const store = new JobStore(dir, async () => { throw new Error('default converter must not run'); }, async () => 'source');
+    const first = await finish(store, (await store.start(scan, ['btsx'], false, endpoint('remote', null))).id);
+    assert.deepEqual(first.converter, { target: 'remote', url: 'http://remote.test/api/converter' });
+    const done = await finish(store, (await store.retry(first.id, endpoint('local', 'p local'))).id);
+    assert.equal(done.status, 'completed');
+    assert.deepEqual(used, ['remote', 'local']);
+    assert.equal((await new JobStore(dir, async () => ({ outputs: {}, raw: null })).get(done.id)).converter?.target, 'local');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('accepts only loopback local converter URLs', () => {
+  assert.equal(converterUrl('http://localhost:8787/api/converter', true), 'http://localhost:8787/api/converter');
+  assert.equal(converterUrl('http://[::1]:8787/api/converter', true), 'http://[::1]:8787/api/converter');
+  assert.equal(converterUrl('https://converter.test/api/converter'), 'https://converter.test/api/converter');
+  for (const url of ['https://converter.test/api/converter', 'http://user:pw@localhost:8787/', 'file:///etc/passwd', 'nope']) {
+    assert.throws(() => converterUrl(url, true));
+  }
+});
+
+test('treats only JSON answers as the converter API when checking an endpoint', async () => {
+  const api = await checkConverter('http://localhost:8787/api/converter', (async () => Response.json({ error: 'Use POST.' }, { status: 405 })) as Fetcher);
+  assert.equal(api.ok, true);
+  const page = await checkConverter('http://localhost:8080/api/converter', (async () => new Response('<!doctype html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })) as Fetcher);
+  assert.equal(page.ok, false);
+  assert.match(page.error ?? '', /text\/html \(HTTP 200\), not the converter API/);
+  const down = await checkConverter('http://localhost:9/api/converter', (async () => { throw new TypeError('fetch failed'); }) as Fetcher);
+  assert.deepEqual(down, { ok: false, error: 'Nothing is listening at this address.' });
 });

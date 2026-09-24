@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Job, OutputFormat, Scan, SourceFile } from '../src/lib/types';
+import type { ConverterTarget, Job, OutputFormat, Scan, SourceFile } from '../src/lib/types';
 import { HttpError, readSource } from './github';
 import { ConversionError, type ConversionResult } from './converter';
 import { extractMetadata, responseCode } from './metadata';
 
 export type Convert = (code: string, formats: OutputFormat[], signal: AbortSignal) => Promise<ConversionResult>;
+/** A named converter endpoint. Jobs record the target and URL they ran against. */
+export interface ConverterChoice { target: ConverterTarget; url: string; convert: Convert }
 export function selectFiles(scan: Scan, paths: unknown): Scan {
   if (!Array.isArray(paths) || !paths.length || paths.some(path => typeof path !== 'string')) {
     throw new HttpError(400, 'Select at least one repository file.');
@@ -36,7 +38,7 @@ export class JobStore {
     private sourceReader: (scan: Scan, file: SourceFile, signal?: AbortSignal) => Promise<string> = readSource,
   ) {}
 
-  async start(scan: Scan, formats: OutputFormat[], includeTs: boolean) {
+  async start(scan: Scan, formats: OutputFormat[], includeTs: boolean, converter?: ConverterChoice) {
     if (this.controllers.size) throw new HttpError(409, 'A conversion is already running. Wait for it to finish or cancel it.');
     if (!formats.length || formats.some(format => !['btsx', 'tsrx'].includes(format))) throw new HttpError(400, 'Select at least one output format.');
     const id = randomUUID();
@@ -48,6 +50,7 @@ export class JobStore {
         path: file.path, format, output: `${format}/${file.kind === 'tsx' ? file.path.replace(/\.tsx$/, `.${format}`) : file.path}`,
         status: 'pending' as const,
       }))),
+      ...(converter ? { converter: { target: converter.target, url: converter.url } } : {}),
     };
     if (!job.files.length) throw new HttpError(400, 'No matching files to process.');
     // Validate all destinations before making a directory or sending source code.
@@ -59,7 +62,7 @@ export class JobStore {
     this.jobs.set(id, job);
     try { await this.persist(job); }
     catch (error) { this.controllers.delete(id); this.jobs.delete(id); throw error; }
-    void this.run(job, scan, controller);
+    void this.run(job, scan, controller, converter?.convert ?? this.convert);
     return job;
   }
 
@@ -85,7 +88,7 @@ export class JobStore {
     await rename(`${responsePath}.tmp`, responsePath);
   }
 
-  private async run(job: Job, scan: Scan, controller: AbortController) {
+  private async run(job: Job, scan: Scan, controller: AbortController, convert: Convert) {
     const { signal } = controller;
     let cachedPath = '';
     let cachedSource = '';
@@ -104,7 +107,7 @@ export class JobStore {
             try {
               cachedSource = await this.sourceReader(scan, scan.files.find(source => source.path === file.path)!, signal);
               if (file.path.endsWith('.tsx')) {
-                cachedResult = await this.convert(cachedSource, job.files.filter(item => item.path === file.path && ['pending', 'running'].includes(item.status)).map(item => item.format), signal);
+                cachedResult = await convert(cachedSource, job.files.filter(item => item.path === file.path && ['pending', 'running'].includes(item.status)).map(item => item.format), signal);
                 signal.throwIfAborted();
                 await this.saveResponse(job, file.path, cachedResult.raw);
               }
@@ -172,7 +175,7 @@ export class JobStore {
 
   cancel(id: string) { this.controllers.get(id)?.abort(); }
 
-  async retry(id: string) {
+  async retry(id: string, converter?: ConverterChoice) {
     if (this.controllers.size) throw new HttpError(409, 'A conversion is already running.');
     const job = await this.get(id);
     if (!job.files.some(file => file.status === 'failed' || file.status === 'cancelled')) throw new HttpError(400, 'No failed or cancelled files to retry.');
@@ -186,13 +189,14 @@ export class JobStore {
       }
     }
     job.status = 'running'; delete job.error;
+    if (converter) job.converter = { target: converter.target, url: converter.url };
     this.jobs.set(id, job);
     try { await this.persist(job); }
     catch (error) { this.controllers.delete(id); job.status = 'failed'; throw error; }
     const sources: SourceFile[] = [...new Set(job.files.map(file => file.path))].map(path => ({
       path, sha: '', size: 0, kind: path.endsWith('.tsx') ? 'tsx' : 'ts',
     }));
-    void this.run(job, { ...job.source, files: sources }, controller);
+    void this.run(job, { ...job.source, files: sources }, controller, converter?.convert ?? this.convert);
     return job;
   }
 

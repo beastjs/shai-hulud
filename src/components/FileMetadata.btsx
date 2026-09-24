@@ -1,13 +1,13 @@
 import type { ConversionMetadata } from '../lib/types'
+import Icon from './Icon.btsx'
 
 module
   const count = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString('en-US');
-  const fields = [{ key: 'lines', label: 'Lines' }, { key: 'chars', label: 'Characters' }, { key: 'tokens', label: 'Tokens' }] as const;
+  const fields = [{ key: 'lines', label: 'Lines' }, { key: 'chars', label: 'Chars' }, { key: 'tokens', label: 'Tokens' }] as const;
 
 props { metadata }: { metadata?: ConversionMetadata }
 
 span.conversion-metadata
-  span.metrics-heading Source → converted
   span.file-metrics
     each field in fields key field.key
       span.metric
@@ -16,9 +16,9 @@ span.conversion-metadata
           span.metric-input #{count(metadata?.input[field.key])}
           span.metric-arrow(aria-hidden='true') →
           strong #{count(metadata?.output[field.key])}
-  span(className={'compile-badge ' + (metadata?.octane.ok === true ? 'compile-success' : metadata?.octane.ok === false ? 'compile-failed' : 'compile-unknown')})
-    span(aria-hidden='true') #{metadata?.octane.ok === true ? '✓' : metadata?.octane.ok === false ? '!' : '·'}
-    span #{metadata?.octane.ok === true ? 'Octane compiled successfully' : metadata?.octane.ok === false ? 'Octane compilation failed' : 'Octane result not reported'}
+  span(className={'compile-badge ' + (metadata?.octane.ok === true ? 'tone-green' : metadata?.octane.ok === false ? 'tone-red' : 'tone-gray')} title={metadata?.octane.ok === true ? 'Octane compiled successfully' : metadata?.octane.ok === false ? 'Octane compilation failed' : 'Octane result not reported'})
+    Icon(name={metadata?.octane.ok === true ? 'check' : metadata?.octane.ok === false ? 'alert' : 'info'} size={12})
+    span #{metadata?.octane.ok === true ? 'Octane' : metadata?.octane.ok === false ? 'Octane failed' : 'Not reported'}
   if metadata?.octane.ok === false && metadata.octane.error
     span.compilation-error #{metadata.octane.error}
   if metadata?.beast.ok === false

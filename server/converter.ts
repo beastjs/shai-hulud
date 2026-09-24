@@ -1,8 +1,47 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { OutputFormat } from '../src/lib/types';
-import type { Fetcher } from './github';
+import { HttpError, type Fetcher } from './github';
 
 export const defaultConverterUrl = 'https://playground.beastjs.workers.dev/api/converter';
+// `wrangler dev` in the converter project serves the Worker's /api routes here.
+export const defaultLocalConverterUrl = 'http://localhost:8787/api/converter';
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Validates a converter endpoint. A local endpoint must be on this machine. */
+export function converterUrl(value: unknown, local = false) {
+  let url: URL;
+  try { url = new URL(String(value)); } catch { throw new HttpError(400, 'Converter URL is not a valid URL.'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new HttpError(400, 'Converter URL must use HTTP or HTTPS without credentials.');
+  }
+  if (local && !loopbackHosts.has(url.hostname)) throw new HttpError(400, 'A local converter must run on localhost, 127.0.0.1 or [::1].');
+  return url.href;
+}
+
+/** The endpoint without its query string, for display and manifests. */
+export function publicUrl(value: string) {
+  const url = new URL(value);
+  return url.origin + url.pathname;
+}
+
+/**
+ * The converter answers GET with a 405 JSON error, while web pages and UI dev
+ * servers answer with HTML, so only a JSON response counts as the API.
+ */
+export async function checkConverter(url: string, fetcher: Fetcher = fetch): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
+  const started = performance.now();
+  try {
+    const response = await fetcher(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4000) });
+    await response.body?.cancel();
+    const latencyMs = Math.round(performance.now() - started);
+    const type = response.headers.get('content-type')?.split(';')[0] ?? '';
+    if (type.includes('json')) return { ok: true, latencyMs };
+    return { ok: false, latencyMs, error: `Answered with ${type || 'a non-JSON response'} (HTTP ${response.status}), not the converter API.` };
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === 'TimeoutError';
+    return { ok: false, error: timedOut ? 'No response within 4 seconds.' : 'Nothing is listening at this address.' };
+  }
+}
 export interface ConversionResult {
   outputs: Partial<Record<OutputFormat, { code?: string; error?: string; warning?: string }>>;
   raw: unknown;
