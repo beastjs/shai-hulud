@@ -1,0 +1,18 @@
+# Changelog
+
+All notable changes to `shai-hulud` will be recorded here.
+
+## [Unreleased]
+
+- Show source/output metrics and explicit Octane compilation results in each
+  converted file row, persist metadata in manifests, and load older saved results.
+
+- Add repository file checkboxes, select-all with a partial-selection state,
+  selected counts, and server-validated conversion of only selected files.
+
+- Replace the starter screen with a GitHub repository conversion workspace.
+- Resolve public repository/folder URLs to a commit and recursively discover TSX/TS files.
+- Integrate the live Beast converter with BTSX, TSRX, or both in one request per TSX file.
+- Save converted code, unchanged TS files, raw JSON responses, and run manifests locally.
+- Add progress, cancellation, per-file errors and warnings, search, previews, and downloads.
+- Add the local API, development runner, production serving, configuration, and regression tests.

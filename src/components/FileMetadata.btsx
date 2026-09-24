@@ -1,0 +1,25 @@
+import type { ConversionMetadata } from '../lib/types'
+
+module
+  const count = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString('en-US');
+  const fields = [{ key: 'lines', label: 'Lines' }, { key: 'chars', label: 'Characters' }, { key: 'tokens', label: 'Tokens' }] as const;
+
+props { metadata }: { metadata?: ConversionMetadata }
+
+span.conversion-metadata
+  span.metrics-heading Source → converted
+  span.file-metrics
+    each field in fields key field.key
+      span.metric
+        span.metric-label #{field.label}
+        span.metric-values
+          span.metric-input #{count(metadata?.input[field.key])}
+          span.metric-arrow(aria-hidden='true') →
+          strong #{count(metadata?.output[field.key])}
+  span(className={'compile-badge ' + (metadata?.octane.ok === true ? 'compile-success' : metadata?.octane.ok === false ? 'compile-failed' : 'compile-unknown')})
+    span(aria-hidden='true') #{metadata?.octane.ok === true ? '✓' : metadata?.octane.ok === false ? '!' : '·'}
+    span #{metadata?.octane.ok === true ? 'Octane compiled successfully' : metadata?.octane.ok === false ? 'Octane compilation failed' : 'Octane result not reported'}
+  if metadata?.octane.ok === false && metadata.octane.error
+    span.compilation-error #{metadata.octane.error}
+  if metadata?.beast.ok === false
+    span.compilation-error #{'Beast compilation failed' + (metadata.beast.error ? ': ' + metadata.beast.error : '')}

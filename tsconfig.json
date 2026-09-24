@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "jsx": "preserve",
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "plugins": [
+      {
+        "name": "@tsrx/typescript-plugin"
+      }
+    ]
+  },
+  "include": [
+    "src",
+    "server",
+    "scripts",
+    "rspack.config.ts"
+  ],
+  "tsrx": {
+    "compiler": "octane"
+  }
+}
