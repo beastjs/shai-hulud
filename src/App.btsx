@@ -2,6 +2,7 @@ import { useCrawler, exampleUrl } from './lib/use-crawler'
 import FileMetadata from './components/FileMetadata.btsx'
 import Icon from './components/Icon.btsx'
 import Ring from './components/Ring.btsx'
+import CallChip from "./components/ui/call-chip.btsx";
 
 module
   type Crawler = ReturnType<typeof useCrawler>;
@@ -59,6 +60,7 @@ module
 setup const c = useCrawler();
 setup const o = overview(c);
 setup const endpoint = converterState(c);
+setup const callChipStatus = {idle: c.converterS, running: 'running', done: 'done', error: 'error'}
 
 div.app-shell
   div.frame
@@ -141,6 +143,7 @@ div.app-shell
                   span #{c.converterStatus.error}
                   if c.converter === 'local'
                     span.endpoint-hint Run wrangler dev in your converter project, or enter the URL it serves.
+          section(className='p-2')
 
         main.column
           section.card.overview

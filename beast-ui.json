@@ -1,0 +1,12 @@
+{
+  "registry": "https://beast-ui-registry.beastjs.workers.dev/r",
+  "paths": {
+    "ui": "src/components/ui",
+    "lib": "src/lib",
+    "styles": "src/styles"
+  },
+  "aliases": {
+    "utils": "@/lib/utils"
+  },
+  "packageManager": "bun"
+}
