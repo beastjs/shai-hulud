@@ -60,7 +60,6 @@ module
 setup const c = useCrawler();
 setup const o = overview(c);
 setup const endpoint = converterState(c);
-setup const callChipStatus = {idle: c.converterS, running: 'running', done: 'done', error: 'error'}
 
 div.app-shell
   div.frame
