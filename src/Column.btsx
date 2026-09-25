@@ -1,0 +1,70 @@
+import { exampleUrl } from './lib/use-crawler'
+import Icon from './components/Icon.btsx'
+module
+  type Format = 'btsx' | 'tsrx' | 'both';
+  type FormatHints = Record<Format, string>
+  export const formatModes = ['btsx', 'tsrx', 'both'] as const;
+  export const formatNames = { btsx: 'BTSX', tsrx: 'TSRX', both: 'BTSX + TSRX' };
+  export const formatHints: FormatHints = { btsx: 'Beast syntax · writes .btsx', tsrx: 'Octane syntax · writes .tsrx', both: 'One request per file · writes both' };
+
+component Endpoint
+  props { c, endpoint }: { c: ({ c: any; endpoint: any })['c']; endpoint: ({ c: any; endpoint: any })['endpoint'] }
+  div.endpoint
+    div.endpoint-head
+      span.eyebrow #{c.converter === 'local' ? 'Local converter' : 'Remote converter'}
+      span(className={'pill tone-' + endpoint.tone} role='status')
+        span.pill-dot
+        span #{endpoint.label}
+    if c.converter === 'local'
+      form.endpoint-row(onSubmit={(event) => { event.preventDefault(); c.applyLocalUrl(); }})
+        input.field.endpoint-input(type='url' aria-label='Local converter URL' placeholder={c.config?.converters.local ?? 'http://localhost:8787/api/converter'} value={c.localDraft} onInput={(event) => c.setLocalDraft(event.currentTarget.value)} onBlur={() => c.applyLocalUrl()} spellCheck={false})
+        button.icon-button(type='submit' title='Check again' aria-label='Check local converter')
+          Icon(name='refresh' size={14})
+    else
+      div.endpoint-row
+        code.endpoint-url(title={c.activeUrl}) #{c.activeUrl || 'Loading…'}
+        button.icon-button(type='button' title='Check again' aria-label='Check remote converter' onClick={() => c.recheckConverter()})
+          Icon(name='refresh' size={14})
+    if c.converterStatus && !c.converterStatus.ok
+      p.endpoint-error
+        span #{c.converterStatus.error}
+        if c.converter === 'local'
+          span.endpoint-hint Run wrangler dev in your converter project, or enter the URL it serves.
+
+props { c, endpoint }: { c: any; endpoint: any }
+
+aside.column
+  section.card
+    div.card-head
+      span.eyebrow 01 · Source
+      button.link-button(type='button' disabled={c.busy || c.running} onClick={() => c.setUrl(exampleUrl)}) Git repo / folder
+    form.source-form(onSubmit={(event) => { event.preventDefault(); c.crawl(); }})
+      label.field-label(htmlFor='repo-url')
+      textarea#repo-url.field(rows={3} placeholder='https://github.com/owner/repo/tree/main/components' value={c.url} onInput={(event) => c.setUrl(event.currentTarget.value)} disabled={c.busy || c.running} required={true} spellCheck={false})
+      button.link-button(className='py-4!' type='button' disabled={c.busy || c.running} onClick={() => c.setUrl(exampleUrl)}) try reui repo
+      button.btn.btn-dark.btn-block(type='submit' disabled={!c.url.trim() || c.busy || c.running})
+        Icon(name='scan' size={15})
+        span #{c.busy && !c.running ? 'Working…' : 'Inspect repository'}
+    if c.source
+      div.repo
+        span.circle-icon
+          Icon(name='branch' size={16})
+        div.repo-text
+          strong #{c.source.owner + '/' + c.source.repo}
+          span.meta.plain #{c.source.ref + ' · ' + c.source.commit.slice(0, 7) + ' · ' + (c.source.folder || 'root')}
+
+  section.card
+    div.card-head
+      span.eyebrow 02 · Output
+    div.segmented(role='radiogroup' aria-label='Output format')
+      each mode in formatModes key mode
+        button(type='button' role='radio' aria-checked={c.formatMode === mode} disabled={c.running || c.busy} onClick={() => c.chooseFormat(mode)}) #{mode === 'both' ? 'Both' : formatNames[mode]}
+
+    label.switch-row
+      span.switch-text
+        | Include TS files
+      input.sr-only(type='checkbox' role='switch' checked={c.includeTs} onChange={(event) => c.setIncludeTs(event.currentTarget.checked)} disabled={c.running || c.busy})
+      span.switch(aria-hidden='true')
+
+    Endpoint(c={c} endpoint={endpoint})
+  section(className='p-2')

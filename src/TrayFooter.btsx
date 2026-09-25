@@ -1,0 +1,15 @@
+import Icon from './components/Icon.btsx'
+
+module
+  export const jobTone: Record<string, string> = { running: 'orange', completed: 'green', failed: 'red', cancelled: 'amber' };
+props { c }: { c: any }
+
+footer.tray-footer
+  div.footer-status
+    span(className={'live-dot tone-' + (c.job ? jobTone[c.job.status] : 'gray')} aria-hidden='true')
+    span.meta #{c.job ? (c.running ? 'Saving to' : 'Output') : 'Output root'}
+    code(title={c.job?.outputDir ?? c.config?.outputRoot}) #{c.job?.outputDir ?? c.config?.outputRoot ?? '—'}
+  if c.job
+    a.btn.btn-outline(href={`/api/jobs/${c.job.id}/manifest`} download='manifest.json')
+      Icon(name='download' size={14})
+      span Manifest

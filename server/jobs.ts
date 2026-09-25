@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ConverterTarget, Job, OutputFormat, Scan, SourceFile } from '../src/lib/types';
 import { HttpError, readSource } from './github';
@@ -17,6 +17,11 @@ export function selectFiles(scan: Scan, paths: unknown): Scan {
   const available = new Set(scan.files.map(file => file.path));
   if ([...selected].some(path => !available.has(path))) throw new HttpError(400, 'Selected files must belong to the inspected repository folder.');
   return { ...scan, files: scan.files.filter(file => selected.has(file.path)) };
+}
+
+/** Identifies a source file across scans of any folder in the same repository and ref. */
+function sourceKey(source: Omit<Scan, 'files'>, path: string) {
+  return [source.owner.toLowerCase(), source.repo.toLowerCase(), source.ref, [source.folder, path].filter(Boolean).join('/')].join('\0');
 }
 
 export function safePath(root: string, path: string) {
@@ -38,21 +43,54 @@ export class JobStore {
     private sourceReader: (scan: Scan, file: SourceFile, signal?: AbortSignal) => Promise<string> = readSource,
   ) {}
 
+  /**
+   * Maps each scanned path to the formats already saved for it by any earlier run,
+   * whichever folder of the repository that run inspected. Outputs deleted from
+   * disk no longer count.
+   */
+  async existing(scan: Scan): Promise<Record<string, OutputFormat[]>> {
+    const wanted = new Map(scan.files.map(file => [sourceKey(scan, file.path), file.path]));
+    const found: Record<string, OutputFormat[]> = {};
+    let ids: string[];
+    try { ids = (await readdir(this.outputRoot)).filter(id => /^[a-f0-9-]{36}$/.test(id)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return found; throw error; }
+    await Promise.all(ids.map(async id => {
+      let job: Job | undefined = this.jobs.get(id);
+      if (!job) {
+        try { job = JSON.parse(await readFile(resolve(this.outputRoot, id, 'manifest.json'), 'utf8')) as Job; }
+        catch { return; }
+      }
+      const outputDir = resolve(this.outputRoot, id);
+      await Promise.all(job.files.map(async file => {
+        const path = file.status === 'saved' ? wanted.get(sourceKey(job.source, file.path)) : undefined;
+        if (!path || found[path]?.includes(file.format)) return;
+        try { await access(safePath(outputDir, file.output)); } catch { return; }
+        // Another run may have recorded this format while the file was being checked.
+        if (!found[path]?.includes(file.format)) (found[path] ??= []).push(file.format);
+      }));
+    }));
+    for (const formats of Object.values(found)) formats.sort();
+    return found;
+  }
+
   async start(scan: Scan, formats: OutputFormat[], includeTs: boolean, converter?: ConverterChoice) {
     if (this.controllers.size) throw new HttpError(409, 'A conversion is already running. Wait for it to finish or cancel it.');
     if (!formats.length || formats.some(format => !['btsx', 'tsrx'].includes(format))) throw new HttpError(400, 'Select at least one output format.');
     const id = randomUUID();
-    const { files: sources, ...source } = scan;
+    const { files: sources, existing: _, ...source } = scan;
+    // Never regenerate an output an earlier run already saved.
+    const done = await this.existing(scan);
+    if (this.controllers.size) throw new HttpError(409, 'A conversion is already running. Wait for it to finish or cancel it.');
     const job: Job = {
       id, status: 'running', createdAt: new Date().toISOString(), source,
       outputDir: resolve(this.outputRoot, id),
-      files: sources.filter(file => includeTs || file.kind === 'tsx').flatMap(file => [...new Set(formats)].map(format => ({
+      files: sources.filter(file => includeTs || file.kind === 'tsx').flatMap(file => [...new Set(formats)].filter(format => !done[file.path]?.includes(format)).map(format => ({
         path: file.path, format, output: `${format}/${file.kind === 'tsx' ? file.path.replace(/\.tsx$/, `.${format}`) : file.path}`,
         status: 'pending' as const,
       }))),
       ...(converter ? { converter: { target: converter.target, url: converter.url } } : {}),
     };
-    if (!job.files.length) throw new HttpError(400, 'No matching files to process.');
+    if (!job.files.length) throw new HttpError(400, sources.some(file => done[file.path]) ? 'The selected files are already in the output folder.' : 'No matching files to process.');
     // Validate all destinations before making a directory or sending source code.
     for (const file of job.files) safePath(job.outputDir, file.output);
     const destinations = job.files.map(file => file.output.toLocaleLowerCase());

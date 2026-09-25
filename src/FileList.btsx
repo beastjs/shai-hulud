@@ -1,0 +1,53 @@
+import FileMetadata from './components/FileMetadata.btsx'
+import Icon from './components/Icon.btsx'
+
+module
+  export const statusTone: Record<string, string> = { saved: 'green', failed: 'red', cancelled: 'amber', running: 'orange', pending: 'gray', ready: 'gray' };
+  export const statusLabel: Record<string, string> = { saved: 'Saved', failed: 'Failed', cancelled: 'Cancelled', running: 'Running', pending: 'Queued', ready: 'Ready' };
+
+component Row
+  props { row, c }: { row: any; c: ({ c: any })['c'] }
+  button.row.output-row(type='button' disabled={row.status !== 'saved'} onClick={() => c.setOutputPath(row.output)} aria-pressed={c.outputPath === row.output} title={row.path})
+    span.circle-icon
+      Icon(name={row.kind === 'tsx' ? 'code' : 'braces'} size={16})
+      span(className={'circle-dot tone-' + statusTone[row.status]})
+    span.row-body
+      span.row-title #{row.name}
+      span.row-meta
+        if row.dir
+          span.row-path #{row.dir + ' · '}
+        span #{(row.kind === 'tsx' ? 'tsx → ' : 'ts copy → ') + row.format}
+      if row.error || row.warning
+        span(className={row.error ? 'row-error' : 'row-warning'}) #{row.error || row.warning}
+    span.row-details
+      if row.kind === 'tsx' && (row.status === 'saved' || row.status === 'failed')
+        FileMetadata(metadata={row.metadata})
+      if row.kind === 'ts' && row.status === 'saved'
+        span.meta Copied unchanged · not compiled
+    span(className={'pill tone-' + statusTone[row.status]}) #{statusLabel[row.status]}
+
+component Row2
+  props { row, c }: { row: any; c: ({ c: any })['c'] }
+  label.row.select-row
+    span.circle-icon
+      Icon(name={row.kind === 'tsx' ? 'code' : 'braces'} size={16})
+    span.row-body
+      span.row-title #{row.name}
+      span.row-meta
+        if row.dir
+          span.row-path #{row.dir + ' · '}
+        span #{row.kind === 'tsx' ? 'tsx · convert' : c.includeTs ? 'ts · copy as-is' : 'ts · excluded'}
+    input.sr-only(type='checkbox' aria-label={`Select ${row.path}`} checked={c.selectedPaths.has(row.path) && (c.includeTs || row.kind === 'tsx')} disabled={c.busy || (!c.includeTs && row.kind === 'ts')} onChange={() => c.toggleFile(row.path)})
+    span.check(aria-hidden='true')
+      Icon(name='check' size={12})
+
+props { c }: { c: any }
+
+div.file-list
+  each row in c.rows key row.output
+    if c.job
+      Row(row={row} c={c})
+    else
+      Row2(row={row} c={c})
+  empty
+    p.no-files #{c.filter ? 'No files match your filter.' : c.view !== 'all' ? 'Nothing in this view.' : c.convertedCount ? 'Every file here is already in the output folder.' : 'No .tsx or .ts files found in this folder.'}

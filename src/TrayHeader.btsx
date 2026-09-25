@@ -1,0 +1,27 @@
+import Icon from './components/Icon.btsx'
+import { ThinkingOrb } from '@beastjs/thinking-orbs'
+import { OctaneNode } from 'octane'
+
+
+props { c, endpoint,children }: { c: any; endpoint: any, children: OctaneNode }
+
+header.tray-header
+  div.tray-title
+
+    div(className='size-12 flex items-center relative')
+      ThinkingOrb(state='searching' size={64} speed={0.2515})
+      h1(className='absolute font-mono font-thin lowercase tracking-widest') SH
+
+    span.info-icon(tabIndex={0} title='Crawl public GitHub folders, convert TSX to BTSX or TSRX, and save the results locally.' aria-label='About Shai Hulud')
+  | #{children}
+  div.converter-switch(role='radiogroup' aria-label='Converter endpoint')
+    button(type='button' role='radio' aria-checked={c.converter === 'remote'} onClick={() => c.chooseConverter('remote')} title={c.config?.converters.remote})
+      Icon(name='cloud' size={15})
+      span Remote
+      if c.converter === 'remote'
+        span(className={'live-dot tone-' + endpoint.tone} aria-hidden='true')
+    button(type='button' role='radio' aria-checked={c.converter === 'local'} onClick={() => c.chooseConverter('local')} title={c.config?.converters.local})
+      Icon(name='server' size={15})
+      span Local
+      if c.converter === 'local'
+        span(className={'live-dot tone-' + endpoint.tone} aria-hidden='true')

@@ -65,6 +65,7 @@ const server = createServer(async (req, res) => {
       scanning = true;
       try {
         const scan = await scanRepository(data.url);
+        scan.existing = await store.existing(scan);
         while (scans.size >= 20) scans.delete(scans.keys().next().value!);
         scans.set(scan.id, { scan, created: Date.now() });
         json(res, scan);

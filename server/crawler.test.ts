@@ -309,3 +309,28 @@ test('treats only JSON answers as the converter API when checking an endpoint', 
   const down = await checkConverter('http://localhost:9/api/converter', (async () => { throw new TypeError('fetch failed'); }) as Fetcher);
   assert.deepEqual(down, { ok: false, error: 'Nothing is listening at this address.' });
 });
+
+test('reports outputs saved by earlier runs across folders and never converts them again', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'shai-existing-test-'));
+  try {
+    const formatsSent: string[][] = [];
+    const store = new JobStore(dir, async (_code, formats) => {
+      formatsSent.push(formats);
+      return { outputs: { btsx: { code: 'p b' }, tsrx: { code: '<p>t</p>' } }, raw: {} };
+    }, async () => 'source');
+    assert.deepEqual(await store.existing(scan), {});
+    await finish(store, (await store.start(selectFiles(scan, ['nested/a.tsx']), ['btsx'], true)).id);
+    // The same file seen from the repository root, with a differently cased owner.
+    const parent: Scan = { ...scan, owner: 'Org', folder: '', files: scan.files.map(file => ({ ...file, path: `ui/${file.path}` })) };
+    assert.deepEqual(await store.existing(parent), { 'ui/nested/a.tsx': ['btsx'] });
+    assert.deepEqual(await store.existing({ ...parent, ref: 'dev' }), {});
+    await assert.rejects(store.start(selectFiles(parent, ['ui/nested/a.tsx']), ['btsx'], true), /already in the output folder/);
+    const done = await finish(store, (await store.start(selectFiles(parent, ['ui/nested/a.tsx']), ['btsx', 'tsrx'], true)).id);
+    assert.deepEqual(done.files.map(file => file.output), ['tsrx/ui/nested/a.tsrx']);
+    assert.deepEqual(formatsSent, [['btsx'], ['tsrx']]);
+    assert.deepEqual(await store.existing(scan), { 'nested/a.tsx': ['btsx', 'tsrx'] });
+    // Outputs removed from disk no longer count.
+    await rm(join(done.outputDir, 'tsrx'), { recursive: true });
+    assert.deepEqual(await store.existing(scan), { 'nested/a.tsx': ['btsx'] });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

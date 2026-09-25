@@ -17,6 +17,8 @@ export interface Scan {
   commit: string;
   folder: string;
   files: SourceFile[];
+  /** Formats already saved in the output folder by earlier runs, keyed by file path. */
+  existing?: Record<string, OutputFormat[]>;
 }
 
 export interface JobFile {
@@ -52,7 +54,7 @@ export interface Job {
   status: 'running' | 'completed' | 'cancelled' | 'failed';
   createdAt: string;
   outputDir: string;
-  source: Omit<Scan, 'files'>;
+  source: Omit<Scan, 'files' | 'existing'>;
   files: JobFile[];
   /** Converter endpoint used by the latest start or retry; absent on older runs. */
   converter?: { target: ConverterTarget; url: string };

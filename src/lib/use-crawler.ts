@@ -178,7 +178,10 @@ export function useCrawler() {
   }
   const formatMode: FormatMode = formats.length > 1 ? 'both' : formats[0] ?? 'btsx';
   function chooseFormat(mode: FormatMode) { setFormats(mode === 'both' ? ['btsx', 'tsrx'] : [mode]); }
-  const files = scan?.files ?? [];
+  // Files whose every chosen format is already saved are hidden so they are not converted twice.
+  const converted = (path: string) => formats.every(format => scan?.existing?.[path]?.includes(format));
+  const files = scan?.files.filter(file => !converted(file.path)) ?? [];
+  const convertedCount = (scan?.files.length ?? 0) - files.length;
   const eligibleFiles = files.filter(file => includeTs || file.kind === 'tsx');
   const selectedFiles = eligibleFiles.filter(file => selectedPaths.has(file.path));
   const allSelected = eligibleFiles.length > 0 && selectedFiles.length === eligibleFiles.length;
@@ -202,7 +205,16 @@ export function useCrawler() {
       return next;
     });
   }
-  function chooseFiles() { setJob(null); setPreview(null); setOutputPath(''); setView('all'); }
+  function chooseFiles() {
+    // Files this run saved are now in the output folder too, so hide them as well.
+    if (scan && job) {
+      const existing = { ...scan.existing };
+      for (const file of job.files) {
+        if (file.status === 'saved' && !existing[file.path]?.includes(file.format)) existing[file.path] = [...existing[file.path] ?? [], file.format];
+      }
+      setScan({ ...scan, existing });
+    }
+    setJob(null); setPreview(null); setOutputPath(''); setView('all'); }
 
   const count = (...statuses: JobFile['status'][]) => job?.files.filter(file => statuses.includes(file.status)).length ?? 0;
   const saved = count('saved');
@@ -256,6 +268,6 @@ export function useCrawler() {
     recheckConverter: () => setStatusCheck(value => value + 1),
     segments: segments.filter(segment => segment.count > 0), tabs, view, setView,
     rows: rows.filter(row => inView(row) && row.path.toLowerCase().includes(query)),
-    tsxCount, tsCount,
+    tsxCount, tsCount, fileCount: files.length, convertedCount,
   };
 }
